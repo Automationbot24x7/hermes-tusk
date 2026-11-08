@@ -1,4 +1,4 @@
-"""Walrus Memory plumbing shared by the provider, the /walrus command and the CLI.
+"""Tusk plumbing shared by the provider, the /tusk command and the CLI.
 
 * ``Settings``  - resolves credentials (through Hermes' secret scope) and options.
 * ``Ledger``    - a small SQLite file in the plugin data dir: a durable outbox of
@@ -28,9 +28,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
-logger = logging.getLogger("walrus-memory")
+logger = logging.getLogger("tusk")
 
-PLUGIN_NAME = "walrus-memory"
+PLUGIN_NAME = "tusk"
 DEFAULT_SERVER_URL = "https://relayer.memory.walrus.xyz"
 DEFAULT_NAMESPACE = "default"
 DEFAULT_AGGREGATOR = "https://aggregator.walrus-mainnet.walrus.space"
@@ -88,7 +88,7 @@ def config_path(hermes_home: Path) -> Path:
 
 
 def load_settings(hermes_home: Optional[Path]) -> Settings:
-    """Secrets from the secret scope; non-secret options from $HERMES_HOME/walrus-memory.json."""
+    """Secrets from the secret scope; non-secret options from $HERMES_HOME/tusk.json."""
     opts: dict[str, Any] = {}
     if hermes_home is not None:
         try:
@@ -113,7 +113,7 @@ def load_settings(hermes_home: Optional[Path]) -> Settings:
 
 
 def data_dir(hermes_home: Optional[Path] = None) -> Path:
-    """``<hermes home>/plugin-data/walrus-memory`` - survives plugin updates and removal."""
+    """``<hermes home>/plugin-data/tusk`` - survives plugin updates and removal."""
     if hermes_home is None:
         try:
             from plugins.plugin_storage import plugin_data_dir  # type: ignore
@@ -393,9 +393,9 @@ class Writer:
             return
         self._stop.clear()
         if self._spawn is not None:
-            self._thread = self._spawn(self._run, name="walrus-memory-writer")
+            self._thread = self._spawn(self._run, name="tusk-writer")
         else:
-            self._thread = threading.Thread(target=self._run, name="walrus-memory-writer", daemon=True)
+            self._thread = threading.Thread(target=self._run, name="tusk-writer", daemon=True)
         self._thread.start()
 
     def wake(self) -> None:
@@ -425,7 +425,7 @@ class Writer:
             else:
                 delay = min(300.0, 10.0 * (2 ** int(row["attempts"])))
             status = self.ledger.retry(row, f"{type(exc).__name__}: {exc}", delay)
-            logger.warning("walrus-memory write %s (%s): %s", status, row["kind"], exc)
+            logger.warning("tusk write %s (%s): %s", status, row["kind"], exc)
             return {"ok": False, "kind": row["kind"], "error": str(exc), "status": status}
         stored = self.ledger.complete(row, receipts)
         if receipts and self._on_stored:
@@ -440,7 +440,7 @@ class Writer:
             try:
                 result = self.step()
             except Exception as exc:  # noqa: BLE001 - never let the writer die
-                logger.warning("walrus-memory writer error: %s", exc)
+                logger.warning("tusk writer error: %s", exc)
                 result = None
             if result is None:
                 self._wake.wait(2.0)
@@ -483,14 +483,14 @@ def format_recall(hits: list[Hit], namespace: str) -> str:
     if not hits:
         return ""
     lines = [
-        f'<walrus-memory namespace="{namespace}">',
+        f'<tusk-memory namespace="{namespace}">',
         "Long-term memories recalled from Walrus (decentralized, encrypted, owned by the user). "
         "Use them as background facts. If the user asks where a fact came from, cite its proof id; "
-        "walrus_memory_search returns the full Walruscan proof link.",
+        "tusk_search returns the full Walruscan proof link.",
     ]
     for h in hits:
         lines.append(f"- {clip(h.text, 400)}  [proof:{short_id(h.blob_id)}]")
-    lines.append("</walrus-memory>")
+    lines.append("</tusk-memory>")
     return "\n".join(lines)
 
 
@@ -501,7 +501,7 @@ def verify_blob(blob_id: str, aggregator: str = DEFAULT_AGGREGATOR, timeout: flo
     ciphertext: the stored bytes must not contain the plaintext we remembered.
     """
     url = f"{aggregator.rstrip('/')}/v1/blobs/{blob_id}"
-    req = urllib.request.Request(url, headers={"User-Agent": "hermes-walrus-memory"})
+    req = urllib.request.Request(url, headers={"User-Agent": "hermes-tusk"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - fixed https host
             body = resp.read(1_000_000)

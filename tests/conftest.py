@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-PLUGIN_DIR = ROOT / "walrus_memory"
+PLUGIN_DIR = ROOT / "tusk"
 
 
 def _install_agent_stub() -> None:
@@ -54,12 +54,12 @@ def _install_agent_stub() -> None:
 
 
 def _load_plugin():
-    if "walrus_memory" in sys.modules:
-        return sys.modules["walrus_memory"]
+    if "tusk" in sys.modules:
+        return sys.modules["tusk"]
     spec = importlib.util.spec_from_file_location(
-        "walrus_memory", PLUGIN_DIR / "__init__.py", submodule_search_locations=[str(PLUGIN_DIR)])
+        "tusk", PLUGIN_DIR / "__init__.py", submodule_search_locations=[str(PLUGIN_DIR)])
     module = importlib.util.module_from_spec(spec)
-    sys.modules["walrus_memory"] = module
+    sys.modules["tusk"] = module
     spec.loader.exec_module(module)
     return module
 
@@ -75,7 +75,7 @@ def plugin():
 
 @pytest.fixture
 def core():
-    import walrus_memory.walrus_core as core
+    import tusk.walrus_core as core
 
     return core
 
@@ -95,7 +95,7 @@ def mock_client():
 
 @pytest.fixture
 def provider(plugin, settings, mock_client, tmp_path):
-    p = plugin.WalrusMemoryProvider(client=mock_client, settings=settings, write_gap_s=0)
+    p = plugin.TuskMemoryProvider(client=mock_client, settings=settings, write_gap_s=0)
     p.initialize("session-1", hermes_home=str(tmp_path), platform="cli", agent_context="primary")
     p._writer.stop()  # tests drive the writer step by step
     yield p

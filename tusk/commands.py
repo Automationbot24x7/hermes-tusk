@@ -1,4 +1,4 @@
-"""/walrus slash command and the shared text reports used by the CLI."""
+"""/tusk slash command and the shared text reports used by the CLI."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ def _hermes_home() -> Optional[Path]:
 def status_report(home: Optional[Path] = None, *, live: bool = False, receipts: int = 5) -> str:
     home = home if home is not None else _hermes_home()
     s = core.load_settings(home)
-    lines = ["Walrus Memory  ·  long-term memory on Walrus mainnet"]
+    lines = ["Tusk  ·  Hermes memory on Walrus mainnet"]
     if not s.configured:
         lines.append(f"  not configured: set {core.ENV_KEY} and {core.ENV_ACCOUNT} (hermes memory setup)")
         return "\n".join(lines)
@@ -76,7 +76,7 @@ def recall_report(query: str, home: Optional[Path] = None, limit: int = 6) -> st
     home = home if home is not None else _hermes_home()
     s = core.load_settings(home)
     if not s.configured:
-        return "Walrus Memory is not configured."
+        return "Tusk is not configured."
     if not query.strip():
         return "Usage: recall <query>"
     client = core.make_client(s)
@@ -121,14 +121,14 @@ def short(blob_id: str) -> str:
     return f"{blob_id[:8]}…{blob_id[-4:]}" if len(blob_id) > 14 else blob_id
 
 
-HELP = """/walrus                 status and latest proofs
-/walrus proofs [n]      last n memories with Walruscan proof links
-/walrus recall <query>  semantic search across all your machines and agents
-/walrus verify [n]      fetch the last n blobs straight from Walrus and check they are encrypted
-/walrus retry           re-queue writes that failed"""
+HELP = """/tusk                 status and latest proofs
+/tusk proofs [n]      last n memories with Walruscan proof links
+/tusk recall <query>  semantic search across all your machines and agents
+/tusk verify [n]      fetch the last n blobs straight from Walrus and check they are encrypted
+/tusk retry           re-queue writes that failed"""
 
 
-def walrus_command(raw_args: str = "", **_: Any) -> str:
+def tusk_command(raw_args: str = "", **_: Any) -> str:
     try:
         parts = shlex.split(raw_args or "")
     except ValueError:
@@ -153,7 +153,7 @@ def walrus_command(raw_args: str = "", **_: Any) -> str:
             return f"Re-queued {n} failed write(s)."
         return HELP
     except Exception as exc:  # noqa: BLE001
-        return f"walrus: {type(exc).__name__}: {exc}"
+        return f"tusk: {type(exc).__name__}: {exc}"
 
 
 def _int(rest: list[str], default: int) -> int:

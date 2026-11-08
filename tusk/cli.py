@@ -1,4 +1,4 @@
-"""`hermes walrus-memory ...` subcommands (shown while walrus-memory is the active memory provider)."""
+"""`hermes tusk ...` subcommands (shown while tusk is the active memory provider)."""
 
 from __future__ import annotations
 
@@ -94,7 +94,7 @@ def cmd_flush(args: Any) -> int:
     home = _home()
     s = core.load_settings(home)
     if not s.configured:
-        _print("Walrus Memory is not configured.")
+        _print("Tusk is not configured.")
         return 1
     flush(home, s)
     return 0
@@ -131,7 +131,7 @@ def cmd_import(args: Any) -> int:
     _print(f"Queued {added} of {len(entries)} built-in memory entries for Walrus "
            f"({len(entries) - added} were already queued or stored).")
     if args.no_flush or not s.configured:
-        _print("They upload in the background the next time Hermes runs (or run: hermes walrus-memory flush).")
+        _print("They upload in the background the next time Hermes runs (or run: hermes tusk flush).")
         return 0
     flush(home, s)
     return 0
@@ -142,7 +142,7 @@ def cmd_restore(args: Any) -> int:
     home = _home()
     s = core.load_settings(home)
     if not s.configured:
-        _print("Walrus Memory is not configured.")
+        _print("Tusk is not configured.")
         return 1
     ns = args.namespace or s.namespace
     client = core.make_client(s)
@@ -161,48 +161,48 @@ def cmd_restore(args: Any) -> int:
 
 
 def register_cli(subparser) -> None:
-    subs = subparser.add_subparsers(dest="walrus_command")
+    subs = subparser.add_subparsers(dest="tusk_command")
 
     p = subs.add_parser("status", help="Account, namespace, queue and latest proofs")
     p.add_argument("--offline", action="store_true", help="Skip the relayer health check")
     p.add_argument("--limit", type=int, default=5)
-    p.set_defaults(walrus_func=cmd_status)
+    p.set_defaults(tusk_func=cmd_status)
 
     p = subs.add_parser("recall", help="Semantic search over your Walrus memory")
     p.add_argument("query", nargs="+")
     p.add_argument("--limit", type=int, default=6)
-    p.set_defaults(walrus_func=cmd_recall)
+    p.set_defaults(tusk_func=cmd_recall)
 
     p = subs.add_parser("proofs", help="Latest stored memories with Walruscan proof links")
     p.add_argument("--limit", type=int, default=10)
-    p.set_defaults(walrus_func=cmd_proofs)
+    p.set_defaults(tusk_func=cmd_proofs)
 
     p = subs.add_parser("verify", help="Fetch recent blobs straight from Walrus and check they are encrypted")
     p.add_argument("--limit", type=int, default=3)
     p.add_argument("--aggregator", default=core.DEFAULT_AGGREGATOR)
-    p.set_defaults(walrus_func=cmd_verify)
+    p.set_defaults(tusk_func=cmd_verify)
 
     p = subs.add_parser("import", help="Copy Hermes' built-in MEMORY.md / USER.md entries to Walrus")
     p.add_argument("--no-flush", action="store_true", help="Queue only; upload later in the background")
-    p.set_defaults(walrus_func=cmd_import)
+    p.set_defaults(tusk_func=cmd_import)
 
     p = subs.add_parser("flush", help="Upload everything still queued, now")
-    p.set_defaults(walrus_func=cmd_flush)
+    p.set_defaults(tusk_func=cmd_flush)
 
     p = subs.add_parser("restore", help="Rebuild the namespace index from the blobs stored on Walrus")
     p.add_argument("--namespace", default=None)
     p.add_argument("--limit", type=int, default=50)
-    p.set_defaults(walrus_func=cmd_restore)
+    p.set_defaults(tusk_func=cmd_restore)
 
     p = subs.add_parser("retry", help="Re-queue writes that failed")
-    p.set_defaults(walrus_func=cmd_retry)
+    p.set_defaults(tusk_func=cmd_retry)
 
     subparser.set_defaults(func=dispatch)
 
 
 def dispatch(args: Any) -> int:
-    fn = getattr(args, "walrus_func", None)
-    if fn is None:  # bare `hermes walrus-memory`
+    fn = getattr(args, "tusk_func", None)
+    if fn is None:  # bare `hermes tusk`
         args.offline, args.limit = False, 5
         fn = cmd_status
     return fn(args)

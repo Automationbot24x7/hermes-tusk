@@ -25,8 +25,8 @@ def drain(p, max_steps=10):
 
 
 def test_manifest_matches_provider(plugin):
-    manifest = yaml.safe_load((ROOT / "walrus_memory" / "plugin.yaml").read_text(encoding="utf-8"))
-    assert manifest["name"] == plugin.WalrusMemoryProvider().name == "walrus-memory"
+    manifest = yaml.safe_load((ROOT / "tusk" / "plugin.yaml").read_text(encoding="utf-8"))
+    assert manifest["name"] == plugin.TuskMemoryProvider().name == "tusk"
     assert {e["name"] for e in manifest["requires_env"]} == {"MEMWAL_PRIVATE_KEY", "MEMWAL_ACCOUNT_ID"}
     assert any(d.startswith("memwal") for d in manifest["python_dependencies"])
 
@@ -34,15 +34,15 @@ def test_manifest_matches_provider(plugin):
 def test_is_available_needs_credentials(plugin, core, monkeypatch):
     monkeypatch.delenv("MEMWAL_PRIVATE_KEY", raising=False)
     monkeypatch.delenv("MEMWAL_ACCOUNT_ID", raising=False)
-    assert plugin.WalrusMemoryProvider().is_available() is False
-    assert "MEMWAL_PRIVATE_KEY" in plugin.WalrusMemoryProvider().unavailable_reason()
+    assert plugin.TuskMemoryProvider().is_available() is False
+    assert "MEMWAL_PRIVATE_KEY" in plugin.TuskMemoryProvider().unavailable_reason()
     ok = core.Settings(key="ab" * 32, account_id="0xabc")
-    assert plugin.WalrusMemoryProvider(settings=ok).is_available() is True
+    assert plugin.TuskMemoryProvider(settings=ok).is_available() is True
 
 
 def test_tool_schemas_are_valid(plugin):
-    names = [t["name"] for t in plugin.WalrusMemoryProvider().get_tool_schemas()]
-    assert names == ["walrus_memory_search", "walrus_memory_remember", "walrus_memory_status"]
+    names = [t["name"] for t in plugin.TuskMemoryProvider().get_tool_schemas()]
+    assert names == ["tusk_search", "tusk_remember", "tusk_status"]
     for t in plugin.TOOL_SCHEMAS:
         assert t["parameters"]["type"] == "object" and t["description"]
 
@@ -62,7 +62,7 @@ def test_turn_is_queued_then_stored_with_proof(provider, core):
 
 
 def test_turn_not_reextracted_when_facts_were_saved_explicitly(provider):
-    provider.handle_tool_call("walrus_memory_remember", {"fact": "Uses Bun for scripts"})
+    provider.handle_tool_call("tusk_remember", {"fact": "Uses Bun for scripts"})
     provider.sync_turn("Remember that I use Bun for scripts", "Saved.")
     assert [p["kind"] for p in provider._ledger.pending()] == ["fact"]
     provider.sync_turn("Our CI runs on Buildkite agents in Mumbai.", "Noted.")  # next turn: normal capture
@@ -99,11 +99,11 @@ def test_pre_compress_sends_dialogue_for_extraction(provider):
 
 
 def test_subagents_never_write(plugin, settings, mock_client, tmp_path):
-    p = plugin.WalrusMemoryProvider(client=mock_client, settings=settings, write_gap_s=0)
+    p = plugin.TuskMemoryProvider(client=mock_client, settings=settings, write_gap_s=0)
     p.initialize("child", hermes_home=str(tmp_path), agent_context="subagent")
     try:
         p.sync_turn("Remember that the launch is on Friday.", "OK")
-        out = json.loads(p.handle_tool_call("walrus_memory_remember", {"fact": "Launch is Friday"}))
+        out = json.loads(p.handle_tool_call("tusk_remember", {"fact": "Launch is Friday"}))
         assert out["queued"] is False
         assert p._ledger.counts()["pending"] == 0
     finally:
@@ -111,7 +111,7 @@ def test_subagents_never_write(plugin, settings, mock_client, tmp_path):
 
 
 def test_outbox_survives_a_crash(plugin, settings, mock_client, tmp_path):
-    a = plugin.WalrusMemoryProvider(client=mock_client, settings=settings, write_gap_s=0)
+    a = plugin.TuskMemoryProvider(client=mock_client, settings=settings, write_gap_s=0)
     a.initialize("s", hermes_home=str(tmp_path), agent_context="primary")
     a._writer.stop()
     a.on_memory_write("add", "memory", "The repo uses uv, not pip", {})
@@ -122,7 +122,7 @@ def test_outbox_survives_a_crash(plugin, settings, mock_client, tmp_path):
     assert probe.counts()["pending"] == 1  # still on disk after the "crash"
     probe.close()
 
-    b = plugin.WalrusMemoryProvider(client=mock_client, settings=settings, write_gap_s=0)
+    b = plugin.TuskMemoryProvider(client=mock_client, settings=settings, write_gap_s=0)
     b.initialize("s2", hermes_home=str(tmp_path), agent_context="primary")  # writer resumes the outbox
     try:
         deadline = time.time() + 5
@@ -186,7 +186,7 @@ def test_permanent_failures_are_parked_not_lost(core, tmp_path):
 def test_lease_prevents_double_send(core, tmp_path):
     ledger = core.Ledger(tmp_path / "l.db")
     ledger.enqueue("fact", "test", "Only send me once")
-    other = core.Ledger(tmp_path / "l.db")  # e.g. `hermes walrus-memory flush` in another process
+    other = core.Ledger(tmp_path / "l.db")  # e.g. `hermes tusk flush` in another process
     assert ledger.claim_next() is not None
     assert other.claim_next() is None
 
@@ -208,10 +208,10 @@ def test_writer_paces_writes(core, mock_client, tmp_path):
 def test_prefetch_injects_memories_with_proof_ids(provider, mock_client):
     mock_client.remember_and_wait("The user's production database is Postgres 16 on Neon", namespace="test")
     block = provider.prefetch("which database does production use", session_id="session-1")
-    assert block.startswith('<walrus-memory namespace="test">')
+    assert block.startswith('<tusk-memory namespace="test">')
     assert "Postgres 16" in block and "[proof:" in block
     status = provider.recall_status()
-    assert status.provider_label == "Walrus" and status.count >= 1
+    assert status.provider_label == "Tusk" and status.count >= 1
 
 
 def test_prefetch_skips_trivial_prompts(provider):
@@ -240,26 +240,26 @@ def test_slow_recall_falls_back_to_warm_cache(provider, core):
 
 def test_search_tool_returns_proof_links(provider, mock_client):
     mock_client.remember_and_wait("The team standup is at 9:30 IST", namespace="test")
-    out = json.loads(provider.handle_tool_call("walrus_memory_search", {"query": "when is standup"}))
+    out = json.loads(provider.handle_tool_call("tusk_search", {"query": "when is standup"}))
     assert out["count"] >= 1
     hit = out["results"][0]
     assert "9:30" in hit["text"] and hit["proof_url"].startswith("https://walruscan.com/mainnet/blob/")
 
 
 def test_remember_and_status_tools(provider):
-    out = json.loads(provider.handle_tool_call("walrus_memory_remember", {"fact": "Ships releases on Thursdays"}))
+    out = json.loads(provider.handle_tool_call("tusk_remember", {"fact": "Ships releases on Thursdays"}))
     assert out["queued"] is True and out["pending_writes"] == 1
-    again = json.loads(provider.handle_tool_call("walrus_memory_remember", {"fact": "Ships releases on Thursdays"}))
+    again = json.loads(provider.handle_tool_call("tusk_remember", {"fact": "Ships releases on Thursdays"}))
     assert again["duplicate"] is True
     drain(provider)
-    status = json.loads(provider.handle_tool_call("walrus_memory_status", {}))
+    status = json.loads(provider.handle_tool_call("tusk_status", {}))
     assert status["stored_by_this_install"] == 1 and status["pending_writes"] == 0
     assert status["recent"][0]["proof_url"].startswith("https://walruscan.com/")
 
 
 def test_bad_tool_input_is_an_error_not_a_crash(provider):
-    assert "error" in json.loads(provider.handle_tool_call("walrus_memory_search", {"query": ""}))
-    assert "error" in json.loads(provider.handle_tool_call("walrus_memory_remember", {}))
+    assert "error" in json.loads(provider.handle_tool_call("tusk_search", {"query": ""}))
+    assert "error" in json.loads(provider.handle_tool_call("tusk_remember", {}))
     assert "error" in json.loads(provider.handle_tool_call("nope", {}))
 
 
@@ -274,7 +274,7 @@ def test_save_config_keeps_secrets_out(provider, tmp_path, core):
 
 
 def test_import_reads_builtin_memory_files(tmp_path):
-    import walrus_memory.cli as cli
+    import tusk.cli as cli
 
     (tmp_path / "memories").mkdir()
     (tmp_path / "memories" / "MEMORY.md").write_text("Repo uses uv\n§\nCI runs on GitHub Actions", encoding="utf-8")
@@ -284,7 +284,7 @@ def test_import_reads_builtin_memory_files(tmp_path):
 
 
 def test_cli_flush_uploads_queue_and_prints_proofs(tmp_path, settings, mock_client, core):
-    import walrus_memory.cli as cli
+    import tusk.cli as cli
 
     ledger = core.open_ledger(tmp_path)
     ledger.enqueue("fact", "test", "Prefers dark mode in every editor")
@@ -299,29 +299,29 @@ def test_cli_flush_uploads_queue_and_prints_proofs(tmp_path, settings, mock_clie
 def test_cli_parser_builds(tmp_path):
     import argparse
 
-    import walrus_memory.cli as cli
+    import tusk.cli as cli
 
     parser = argparse.ArgumentParser()
     cli.register_cli(parser)
     args = parser.parse_args(["recall", "my", "editor", "--limit", "3"])
-    assert args.walrus_func is cli.cmd_recall and args.query == ["my", "editor"] and args.limit == 3
+    assert args.tusk_func is cli.cmd_recall and args.query == ["my", "editor"] and args.limit == 3
     bare = parser.parse_args([])
     assert bare.func is cli.dispatch
 
 
-def test_walrus_command_reports(tmp_path, monkeypatch, core):
-    import walrus_memory.commands as commands
+def test_tusk_command_reports(tmp_path, monkeypatch, core):
+    import tusk.commands as commands
 
     monkeypatch.setattr(commands, "_hermes_home", lambda: tmp_path)
-    assert "No memories stored" in commands.walrus_command("proofs")
+    assert "No memories stored" in commands.tusk_command("proofs")
     ledger = core.open_ledger(tmp_path)
     ledger.enqueue("fact", "test", "Favourite language is Rust")
     row = ledger.claim_next()
     ledger.complete(row, [("Favourite language is Rust", "AbCdEfGhIjKlMnOp1234")])
     ledger.close()
-    out = commands.walrus_command("proofs 5")
+    out = commands.tusk_command("proofs 5")
     assert "Favourite language is Rust" in out and "walruscan.com/mainnet/blob/AbCdEfGhIjKlMnOp1234" in out
-    assert "/walrus recall" in commands.walrus_command("help")
+    assert "/tusk recall" in commands.tusk_command("help")
 
 
 def test_encryption_check(core):

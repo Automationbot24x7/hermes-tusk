@@ -1,12 +1,12 @@
-name: walrus-memory
+name: tusk
 version: 0.1.0
 description: "Long-term memory on Walrus mainnet: encrypted, user-owned, survives reinstalls, follows you to every machine and agent, with a public proof link for every memory."
 author: Automationbot24x7
 license: MIT
-homepage: https://github.com/Automationbot24x7/hermes-walrus-memory
+homepage: https://github.com/Automationbot24x7/hermes-tusk
 requires_hermes: ">=0.23.0"
 platforms: [linux, macos, windows]
-# The provider exposes walrus_memory_search / walrus_memory_remember / walrus_memory_status
+# The provider exposes tusk_search / tusk_remember / tusk_status
 # through MemoryProvider.get_tool_schemas(), not ctx.register_tool(), so nothing is declared here.
 provides_tools: []
 provides_hooks: []

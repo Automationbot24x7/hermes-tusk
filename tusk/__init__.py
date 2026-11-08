@@ -1,4 +1,4 @@
-"""Walrus Memory for Hermes Agent.
+"""Tusk: long-term memory for Hermes Agent on Walrus.
 
 A memory provider that keeps Hermes' long-term memory on Walrus mainnet (decentralized
 storage on Sui) through the official Walrus Memory SDK. Facts are extracted and encrypted
@@ -9,9 +9,9 @@ machine and can be shared with other agents that use the same account and namesp
 Surfaces used:
   * memory provider  - prefetch recall, per-turn capture, mirrors built-in memory writes,
                         saves insights before context compression
-  * tools            - walrus_memory_search / walrus_memory_remember / walrus_memory_status
-  * slash command    - /walrus  (status, proofs, recall, verify, retry)
-  * CLI              - hermes walrus-memory  (status, recall, proofs, verify, import, flush, restore)
+  * tools            - tusk_search / tusk_remember / tusk_status
+  * slash command    - /tusk  (status, proofs, recall, verify, retry)
+  * CLI              - hermes tusk  (status, recall, proofs, verify, import, flush, restore)
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from typing import Any, Optional
 
 from . import walrus_core as core
 
-logger = logging.getLogger("walrus-memory")
+logger = logging.getLogger("tusk")
 
 try:  # inside Hermes
     from agent.memory_provider import MemoryProvider as _Base
@@ -40,9 +40,9 @@ except ImportError:  # pragma: no cover - standalone import (docs, linters)
         return threading.Thread(target=target, name=name, daemon=daemon, args=args, kwargs=kwargs)
 
 
-TOOL_SEARCH = "walrus_memory_search"
-TOOL_REMEMBER = "walrus_memory_remember"
-TOOL_STATUS = "walrus_memory_status"
+TOOL_SEARCH = "tusk_search"
+TOOL_REMEMBER = "tusk_remember"
+TOOL_STATUS = "tusk_status"
 
 TOOL_SCHEMAS = [
     {
@@ -80,7 +80,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": TOOL_STATUS,
-        "description": "Walrus Memory status: namespace, writes waiting in the queue, and the latest stored memories with proof links.",
+        "description": "Tusk status: namespace, writes waiting in the queue, and the latest stored memories with proof links.",
         "parameters": {"type": "object", "properties": {}},
     },
 ]
@@ -90,7 +90,7 @@ def _json(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False, default=str)
 
 
-class WalrusMemoryProvider(_Base):
+class TuskMemoryProvider(_Base):
     """Long-term memory on Walrus mainnet via the official Walrus Memory SDK."""
 
     def __init__(self, client: Any = None, settings: Optional[core.Settings] = None,
@@ -176,9 +176,9 @@ class WalrusMemoryProvider(_Base):
     def system_prompt_block(self) -> str:
         ns = self._settings.namespace if self._settings else core.DEFAULT_NAMESPACE
         return (
-            f"Walrus Memory is active (namespace '{ns}'): the user's long-term memory lives on Walrus, "
+            f"Tusk memory is active (namespace '{ns}'): the user's long-term memory lives on Walrus, "
             "decentralized and encrypted, owned by the user and shared across their machines and agents. "
-            "Relevant memories are recalled automatically each turn inside <walrus-memory> tags, and "
+            "Relevant memories are recalled automatically each turn inside <tusk-memory> tags, and "
             "finished turns are distilled into facts automatically. Entries you save with the built-in "
             "memory tool are mirrored to Walrus too, so save a fact once, with either tool, never both. "
             f"Use {TOOL_SEARCH} to look things up with proof links."
@@ -199,11 +199,11 @@ class WalrusMemoryProvider(_Base):
             except Exception as exc:  # noqa: BLE001
                 box["error"] = exc
 
-        t = spawn_context_thread(run, name="walrus-memory-recall")
+        t = spawn_context_thread(run, name="tusk-recall")
         t.start()
         t.join(self._settings.prefetch_timeout_s)
         if "error" in box:
-            logger.warning("walrus-memory recall failed: %s", box["error"])
+            logger.warning("tusk recall failed: %s", box["error"])
         return box.get("hits")
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
@@ -236,19 +236,19 @@ class WalrusMemoryProvider(_Base):
             try:
                 hits = self._recall(query)
             except Exception as exc:  # noqa: BLE001
-                logger.debug("walrus-memory background recall failed: %s", exc)
+                logger.debug("tusk background recall failed: %s", exc)
                 return
             with self._cache_lock:
                 self._cache[session_id] = (query, hits)
 
-        t = spawn_context_thread(warm, name="walrus-memory-prefetch")
+        t = spawn_context_thread(warm, name="tusk-prefetch")
         self._prefetch_threads[session_id] = t
         t.start()
 
     def recall_status(self):
         if self._last_count is None or RecallStatus is None:
             return None
-        return RecallStatus(provider_label="Walrus", count=self._last_count, glyph="🦭")
+        return RecallStatus(provider_label="Tusk", count=self._last_count, glyph="🦭")
 
     # ------------------------------------------------------------------ capture
 
@@ -320,7 +320,7 @@ class WalrusMemoryProvider(_Base):
                 added = self._enqueue("fact", core.clip(fact, core.MAX_FACT_CHARS))
                 counts = self._ledger.counts() if self._ledger else {}
                 return _json({"queued": added, "duplicate": not added, "pending_writes": counts.get("pending", 0),
-                              "note": "Queued for Walrus. Proof link appears in /walrus once stored."})
+                              "note": "Queued for Walrus. Proof link appears in /tusk once stored."})
             if tool_name == TOOL_STATUS:
                 return _json(self.status())
         except Exception as exc:  # noqa: BLE001
@@ -365,12 +365,12 @@ class WalrusMemoryProvider(_Base):
 
 
 def register(ctx) -> None:
-    ctx.register_memory_provider(WalrusMemoryProvider())
-    from .commands import walrus_command
+    ctx.register_memory_provider(TuskMemoryProvider())
+    from .commands import tusk_command
 
     ctx.register_command(
-        "walrus",
-        walrus_command,
-        description="Walrus Memory: status, proofs, recall, verify",
+        "tusk",
+        tusk_command,
+        description="Tusk (memory on Walrus): status, proofs, recall, verify",
         args_hint="[status|proofs|recall <query>|verify|retry]",
     )
