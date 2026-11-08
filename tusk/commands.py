@@ -121,7 +121,11 @@ def verify_report(home: Path | None = None, limit: int = 3, aggregator: str = co
             lines.append(f"  ✗ {core.short_blob(r['blob_id'])}  not retrievable (HTTP {res['status']}) {took}")
             continue
         sealed = core.plaintext_absent(res["body"], r["text"])
-        verdict = "encrypted: none of the remembered words appear" if sealed else "WARNING: plaintext visible"
+        verdict = {
+            True: "encrypted: none of the remembered words appear",
+            False: "WARNING: plaintext visible",
+            None: "stored (text too short to compare)",
+        }[sealed]
         lines.append(f"  ✓ {core.short_blob(r['blob_id'])}  {res['bytes']} bytes on Walrus  ·  {verdict}  ({took})")
         lines.append(f"      remembered: “{core.clip(r['text'], 64)}”")
         lines.append(f"      stored:     {core.hex_preview(res['body'], 20)} …")

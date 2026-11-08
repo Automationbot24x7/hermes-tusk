@@ -47,14 +47,16 @@ def flush(
             out("Queue is empty: everything is already on Walrus.")
             return 0
         out(f"Sending {pending} queued write(s) to Walrus, paced for the relayer's rate limit...")
-        idle = 0
-        while ledger.counts()["pending"] and idle < 3:
+        while ledger.counts()["pending"]:
             result = writer.step()
-            if result is None:  # waiting on a retry delay, or a running Hermes is sending it
-                idle += 1
-                time.sleep(2)
+            if result is None:
+                wait = _next_due_in(ledger)
+                if wait is None:  # everything left is being sent by a running Hermes
+                    break
+                if wait > 0:
+                    out(f"  … waiting {wait:.0f}s for the relayer's rate limit")
+                    time.sleep(min(wait, 90.0))
                 continue
-            idle = 0
             if not result["ok"]:
                 out(f"  ! {result['kind']} write {result['status']}: {core.clip(result['error'], 120)}")
             elif not result["receipts"]:
@@ -71,6 +73,15 @@ def flush(
         if own_client:
             client.close()
     return stored
+
+
+def _next_due_in(ledger: outbox.Ledger) -> float | None:
+    """Seconds until the next queued job may be sent; None if every queued job is leased elsewhere."""
+    now = time.time()
+    free = [p for p in ledger.pending(1000) if p["claimed_until"] <= now]
+    if not free:
+        return None
+    return max(0.0, min(p["next_at"] for p in free) - now)
 
 
 def read_builtin_entries(home: Path) -> list[str]:

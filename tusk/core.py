@@ -326,13 +326,23 @@ def verify_blob(blob_id: str, aggregator: str = DEFAULT_AGGREGATOR, timeout: flo
         return {"blob_id": blob_id, "ok": False, "status": 0, "bytes": 0, "body": b"", "error": str(exc)}
 
 
-def plaintext_absent(body: bytes, plaintext: str) -> bool:
-    """True when none of the remembered text's longer words appear in the stored bytes."""
-    words = [w for w in re.findall(r"[A-Za-z0-9]{5,}", plaintext or "")][:10]
+def plaintext_absent(body: bytes, plaintext: str) -> bool | None:
+    """Whether the remembered text is absent from the stored bytes; None when it cannot be told.
+
+    Checks the text's longer words, or for text without any (short, or non-Latin script) the
+    whole text, which must be at least 4 bytes to mean anything.
+    """
     if not body:
-        return False
+        return None
+    words = re.findall(r"[A-Za-z0-9]{5,}", plaintext or "")[:10]
+    probes = [w.lower().encode() for w in words]
+    if not probes:
+        whole = (plaintext or "").strip().lower().encode()
+        if len(whole) < 4:
+            return None
+        probes = [whole]
     lowered = body.lower()
-    return not any(w.lower().encode() in lowered for w in words)
+    return not any(p in lowered for p in probes)
 
 
 def hex_preview(body: bytes, length: int = 32) -> str:

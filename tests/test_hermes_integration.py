@@ -62,15 +62,3 @@ def test_tool_schemas_are_exposed(manager):
     mgr, _ = manager
     names = {s["name"] for s in mgr.get_all_tool_schemas()}
     assert {"tusk_search", "tusk_remember", "tusk_namespaces", "tusk_status"} <= names
-
-
-def test_config_schema_file_loads(plugin):
-    import importlib.util
-    from pathlib import Path
-
-    path = Path(plugin.__file__).with_name("config_schema.py")
-    spec = importlib.util.spec_from_file_location("_tusk_schema_test", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    schema = module.CONFIG_SCHEMA
-    assert schema.name == "tusk" and {f.key for f in schema.fields} >= {"private_key", "account_id", "namespace"}

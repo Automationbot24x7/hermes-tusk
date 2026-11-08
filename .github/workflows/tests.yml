@@ -13,8 +13,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - name: Install (release-quarantined with uv --exclude-newer)
+      - name: Install with a 3-day release quarantine
         run: |
           pip install uv
-          uv pip install --system --exclude-newer "$(date -u -d '3 days ago' +%Y-%m-%dT%H:%M:%SZ)" "memwal>=0.2.2,<0.3" pytest pyyaml
-      - run: pytest -q
+          uv pip install --system --exclude-newer "$(date -u -d '3 days ago' +%Y-%m-%dT%H:%M:%SZ)" \
+            "memwal>=0.2.2,<0.3" pytest pyyaml fastapi httpx ruff
+      - name: Lint
+        run: ruff check tusk tests && ruff format --check tusk tests
+      - name: Test
+        run: pytest -q

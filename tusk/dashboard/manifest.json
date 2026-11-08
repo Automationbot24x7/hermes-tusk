@@ -1,0 +1,11 @@
+{
+  "name": "tusk",
+  "label": "Tusk",
+  "description": "Hermes' long-term memory on Walrus: search it, watch writes land, and verify any memory on-chain.",
+  "icon": "Database",
+  "version": "0.2.0",
+  "tab": { "path": "/tusk", "position": "after:skills" },
+  "entry": "dist/index.js",
+  "css": "dist/style.css",
+  "api": "plugin_api.py"
+}

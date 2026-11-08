@@ -489,6 +489,18 @@ def test_cli_flush_uploads_the_queue_and_prints_proofs(tmp_path, settings, mock_
     assert sum("walruscan.com/mainnet/blob/" in line for line in lines) == 2
 
 
+def test_cli_flush_waits_out_a_retry_delay(tmp_path, settings, mock_client, core, outbox):
+    from tusk import cli
+
+    ledger = outbox.open_ledger(core.data_dir(tmp_path))
+    ledger.enqueue("fact", "test", "Backed off once already")
+    ledger._db.execute("UPDATE outbox SET next_at=?", (time.time() + 1.2,))
+    ledger.close()
+    lines = []
+    assert cli.flush(tmp_path, settings, gap_s=0, client=mock_client, out=lines.append) == 1
+    assert any("waiting" in line for line in lines)
+
+
 def test_export_formats(tmp_path, core, outbox):
     from tusk import cli
 
@@ -548,4 +560,7 @@ def test_verify_report(monkeypatch, tmp_path, core, outbox):
 def test_encryption_check(core):
     assert core.plaintext_absent(bytes([0, 231, 193, 111, 190, 160]) * 40, "The user prefers dark mode")
     assert not core.plaintext_absent(b"... The user prefers dark mode ...", "The user prefers dark mode")
-    assert not core.plaintext_absent(b"", "anything")
+    assert core.plaintext_absent(b"", "anything") is None
+    assert core.plaintext_absent(b"\0" * 50, "Go") is None  # too short to tell
+    assert core.plaintext_absent(b"..." + "東京に住む".encode() + b"...", "東京に住む") is False
+    assert core.plaintext_absent(bytes(range(200)), "東京に住む") is True

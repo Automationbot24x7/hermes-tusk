@@ -18,7 +18,7 @@ import os
 import sqlite3
 import threading
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -64,7 +64,8 @@ def content_key(kind: str, namespace: str, text: str) -> str:
     return hashlib.sha256(f"{kind}\x1f{namespace}\x1f{text}".encode()).hexdigest()[:48]
 
 
-def _short(text: str, limit: int) -> str:
+def clip(text: str, limit: int) -> str:
+    """Same as core.clip; repeated so this module stays loadable on its own."""
     text = (text or "").strip()
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
@@ -75,12 +76,12 @@ class Ledger:
     def __init__(self, path: Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        new = not self.path.exists()
+        if not self.path.exists():
+            # Created private before SQLite opens it; SQLite gives its -wal/-shm files the same mode.
+            os.close(os.open(self.path, os.O_CREAT | os.O_WRONLY, 0o600))
         self._lock = threading.RLock()
         self._db = sqlite3.connect(str(self.path), timeout=15, check_same_thread=False, isolation_level=None)
         self._db.row_factory = sqlite3.Row
-        if new and os.name == "posix":
-            os.chmod(self.path, 0o600)  # queued dialogue is private to the user
         with contextlib.suppress(sqlite3.DatabaseError):  # e.g. network filesystems keep the default journal
             self._db.execute("PRAGMA journal_mode=WAL")
         self._db.executescript(_SCHEMA)
@@ -90,25 +91,18 @@ class Ledger:
         with self._lock:
             self._db.close()
 
-    def _write_txn(self):
+    @contextlib.contextmanager
+    def _write_txn(self) -> Iterator[sqlite3.Connection]:
         """BEGIN IMMEDIATE takes SQLite's write lock up front, so check-then-write is atomic
         across processes (a running Hermes and `hermes tusk flush`, say)."""
-        ledger = self
-
-        class _Txn:
-            def __enter__(self):
-                ledger._lock.acquire()
-                ledger._db.execute("BEGIN IMMEDIATE")
-                return ledger._db
-
-            def __exit__(self, exc_type, exc, tb):
-                try:
-                    ledger._db.execute("ROLLBACK" if exc_type else "COMMIT")
-                finally:
-                    ledger._lock.release()
-                return False
-
-        return _Txn()
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                yield self._db
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
+            self._db.execute("COMMIT")
 
     # -- writes ---------------------------------------------------------------
 
@@ -166,13 +160,9 @@ class Ledger:
         with self._write_txn() as db:
             db.execute(
                 "UPDATE outbox SET attempts=?, status=?, next_at=?, claimed_until=0, last_error=? WHERE id=?",
-                (attempts, status, time.time() + delay_s, _short(error, 300), row["id"]),
+                (attempts, status, time.time() + delay_s, clip(error, 300), row["id"]),
             )
         return status
-
-    def release(self, row: sqlite3.Row) -> None:
-        with self._write_txn() as db:
-            db.execute("UPDATE outbox SET claimed_until=0 WHERE id=?", (row["id"],))
 
     def requeue_failed(self) -> int:
         with self._write_txn() as db:
