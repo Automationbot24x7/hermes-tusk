@@ -1,0 +1,27 @@
+name: walrus-memory
+version: 0.1.0
+description: "Long-term memory on Walrus mainnet: encrypted, user-owned, survives reinstalls, follows you to every machine and agent, with a public proof link for every memory."
+author: Automationbot24x7
+license: MIT
+homepage: https://github.com/Automationbot24x7/hermes-walrus-memory
+requires_hermes: ">=0.23.0"
+platforms: [linux, macos, windows]
+# The provider exposes walrus_memory_search / walrus_memory_remember / walrus_memory_status
+# through MemoryProvider.get_tool_schemas(), not ctx.register_tool(), so nothing is declared here.
+provides_tools: []
+provides_hooks: []
+requires_env:
+  - name: MEMWAL_PRIVATE_KEY
+    description: "Walrus Memory delegate private key (hex), created in the Walrus Memory dashboard"
+    url: "https://memory.walrus.xyz"
+    secret: true
+  - name: MEMWAL_ACCOUNT_ID
+    description: "Walrus Memory account id (0x...)"
+    url: "https://memory.walrus.xyz"
+    secret: true
+optional_env:
+  - MEMWAL_NAMESPACE
+  - MEMWAL_SERVER_URL
+python_dependencies:
+  - "memwal>=0.2.2,<0.3"
+tags: [memory, walrus, sui, decentralized, encrypted, portable]
