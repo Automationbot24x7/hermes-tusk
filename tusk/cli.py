@@ -67,7 +67,10 @@ def flush(
         c = ledger.counts()
         out(f"Done: {stored} stored, {c['pending']} still queued, {c['failed']} failed.")
         if c["in_flight"]:
-            out(f"  {c['in_flight']} write(s) are being sent by a running Hermes right now.")
+            out(
+                f"  {c['in_flight']} write(s) are held by another Hermes process; if it has exited,"
+                " they are picked up again automatically within a minute."
+            )
     finally:
         ledger.close()
         if own_client:

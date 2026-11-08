@@ -357,6 +357,31 @@ def test_a_job_is_leased_to_one_process(outbox, tmp_path):
     assert other.counts()["in_flight"] == 1
 
 
+def test_stopping_mid_send_shortens_the_lease(outbox, tmp_path):
+    import threading
+
+    release = threading.Event()
+
+    class Slow:
+        def remember_and_wait(self, *a, **kw):
+            release.wait(5)
+            return SimpleNamespace(blob_id="blob-late")
+
+    ledger = outbox.open_ledger(tmp_path)
+    ledger.enqueue("fact", "test", "Sent while the process exits")
+    writer = outbox.Writer(ledger, Slow, gap_s=0)
+    writer.start()
+    deadline = time.time() + 5
+    while writer._sending is None and time.time() < deadline:
+        time.sleep(0.02)
+    assert writer.stop(timeout=0.1) is False  # still mid-send
+    lease_left = ledger.pending()[0]["claimed_until"] - time.time()
+    assert 0 < lease_left <= outbox.ORPHAN_LEASE_S
+    release.set()
+    writer._thread.join(5)
+    ledger.close()
+
+
 def test_writer_paces_writes(outbox, mock_client, tmp_path):
     ledger = outbox.open_ledger(tmp_path)
     for i in range(2):

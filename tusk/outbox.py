@@ -26,6 +26,7 @@ logger = logging.getLogger("tusk")
 
 WRITE_GAP_S = 11.0  # the managed relayer allows ~6 writes per minute per delegate key
 LEASE_S = 300.0  # longer than the slowest job (JOB_TIMEOUT_MS) so leases never expire mid-send
+ORPHAN_LEASE_S = 30.0  # what is left of a lease whose writer is shutting down mid-send
 JOB_TIMEOUT_MS = 150_000
 MAX_ATTEMPTS = 6
 DEDUPE_DAYS = 30  # identical content is not re-sent within this window
@@ -164,6 +165,14 @@ class Ledger:
             )
         return status
 
+    def shorten_lease(self, row_id: int, seconds: float = ORPHAN_LEASE_S) -> None:
+        """Let another writer pick a job up soon when its current writer is going away mid-send."""
+        with self._write_txn() as db:
+            db.execute(
+                "UPDATE outbox SET claimed_until=MIN(claimed_until, ?) WHERE id=? AND status='pending'",
+                (time.time() + seconds, row_id),
+            )
+
     def requeue_failed(self) -> int:
         with self._write_txn() as db:
             return db.execute(
@@ -278,6 +287,7 @@ class Writer:
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._sending: int | None = None
         self._last_send = 0.0
 
     @property
@@ -302,12 +312,16 @@ class Writer:
         self._wake.set()
 
     def stop(self, timeout: float = 2.0) -> bool:
-        """Ask the thread to stop; True if it has. A job mid-send keeps its lease and is
-        resumed by the next writer once the lease expires (the relayer dedupes facts by key)."""
+        """Ask the thread to stop; True if it has. If a job is still mid-send (one-shot runs exit
+        long before a 20-30 s write finishes), its lease is cut to ORPHAN_LEASE_S so the next writer
+        resumes it soon; facts carry an idempotency key, so a resend cannot store them twice."""
         self._stop.set()
         self._wake.set()
         if self._thread:
             self._thread.join(timeout)
+        if self.alive and self._sending is not None:
+            with contextlib.suppress(sqlite3.Error):
+                self.ledger.shorten_lease(self._sending)
         return not self.alive
 
     def step(self) -> dict[str, Any] | None:
@@ -319,9 +333,11 @@ class Writer:
         if row is None:
             return None
         self._last_send = time.time()
+        self._sending = row["id"]
         try:
             receipts = send_job(self.client, row)
         except Exception as exc:  # every failure is retried later or parked as failed, never dropped
+            self._sending = None
             if is_rate_limited(exc):
                 delay = retry_after(exc, 30.0)
             else:
@@ -329,6 +345,7 @@ class Writer:
             status = self.ledger.retry(row, f"{type(exc).__name__}: {exc}", delay)
             logger.warning("tusk: %s write %s: %s", row["kind"], status, exc)
             return {"ok": False, "kind": row["kind"], "error": str(exc), "status": status}
+        self._sending = None
         stored = self.ledger.complete(row, receipts)
         return {"ok": True, "kind": row["kind"], "stored": stored, "receipts": receipts}
 

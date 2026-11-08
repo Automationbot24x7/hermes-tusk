@@ -35,7 +35,7 @@ def status_report(home: Path | None = None, *, live: bool = True, proofs: int = 
     ledger = _ledger(home)
     try:
         c = ledger.counts()
-        queue = f"{c['pending']} queued" + (f" ({c['in_flight']} sending now)" if c["in_flight"] else "")
+        queue = f"{c['pending']} queued" + (f" ({c['in_flight']} in flight)" if c["in_flight"] else "")
         lines.append(f"  this install  {c['receipts']} stored  ·  {queue}  ·  {c['failed']} failed")
         rows = ledger.receipts(proofs)
         if rows:

@@ -52,6 +52,8 @@ Other memory backends keep your agent's memory in one vendor's database or on on
 
 Already have memories in Hermes? `hermes tusk import` copies your built-in `MEMORY.md` and `USER.md` entries to Walrus.
 
+Updating: after `hermes plugins update tusk`, run `hermes gateway restart` so agents that are already running load the new version.
+
 ## Using it
 
 Just talk to Hermes. Before each turn, Tusk recalls what's relevant into a `<tusk-memory>` block, each line tagged with a short proof id. After the turn, it queues the exchange for fact extraction. Anything saved with Hermes' built-in memory tool is mirrored to Walrus.
