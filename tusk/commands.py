@@ -1,92 +1,101 @@
-"""/tusk slash command and the shared text reports used by the CLI."""
+"""The /tusk slash command, plus the text reports it shares with `hermes tusk`."""
 
 from __future__ import annotations
 
 import shlex
+import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-from . import walrus_core as core
+from . import core, outbox
 
 
-def _hermes_home() -> Optional[Path]:
+def active_home() -> Path | None:
+    """HERMES_HOME of the profile running this command (Hermes resolves it per context)."""
     try:
-        from hermes_constants import get_hermes_home  # type: ignore
-
-        return Path(get_hermes_home())
+        from hermes_constants import get_hermes_home
     except ImportError:
         return None
+    return Path(get_hermes_home())
 
 
-def status_report(home: Optional[Path] = None, *, live: bool = False, receipts: int = 5) -> str:
-    home = home if home is not None else _hermes_home()
+def _ledger(home: Path | None) -> outbox.Ledger:
+    return outbox.open_ledger(core.data_dir(home))
+
+
+def status_report(home: Path | None = None, *, live: bool = True, proofs: int = 5) -> str:
     s = core.load_settings(home)
-    lines = ["Tusk  ·  Hermes memory on Walrus mainnet"]
+    lines = ["Tusk · Hermes memory on Walrus mainnet"]
     if not s.configured:
-        lines.append(f"  not configured: set {core.ENV_KEY} and {core.ENV_ACCOUNT} (hermes memory setup)")
+        lines.append(f"  Not configured. Get a delegate key at {core.SIGNUP_URL}, then run: hermes memory setup")
         return "\n".join(lines)
-    ledger = core.open_ledger(home)
+    lines.append(f"  account     {s.account_short}      namespace  {s.namespace}")
+    if live:
+        lines.append(_live_line(s))
+    ledger = _ledger(home)
     try:
         c = ledger.counts()
-        lines.append(f"  account    {s.account_short}    namespace  {s.namespace}")
-        if live:
-            try:
-                client = core.make_client(s)
-                try:
-                    health = client.health()
-                    ns = client.list_namespaces()
-                    total = next((n.memory_count for n in ns.namespaces if n.name == s.namespace), 0)
-                    lines.append(f"  relayer    {getattr(health, 'status', '?')} ({s.server_url})")
-                    lines.append(f"  memories   {total} in namespace '{s.namespace}' (all machines and agents)")
-                finally:
-                    client.close()
-            except Exception as exc:  # noqa: BLE001
-                lines.append(f"  relayer    unreachable: {exc}")
-        lines.append(f"  this install  {c['receipts']} stored  ·  {c['pending']} queued  ·  {c['failed']} failed")
-        rows = ledger.receipts(receipts)
+        queue = f"{c['pending']} queued" + (f" ({c['in_flight']} sending now)" if c["in_flight"] else "")
+        lines.append(f"  this install  {c['receipts']} stored  ·  {queue}  ·  {c['failed']} failed")
+        rows = ledger.receipts(proofs)
         if rows:
-            lines.append("  latest proofs:")
-            for r in rows:
-                lines.append(f"    ✓ {core.clip(r['text'], 64):<66} {core.proof_url(r['blob_id'])}")
-        pend = ledger.pending(3)
-        for p in pend:
-            lines.append(f"    … queued {p['kind']}: {core.clip(p['text'].replace(chr(10), ' '), 60)}")
+            lines.append("  latest proofs")
+            lines += [f"    ✓ {core.clip(r['text'], 60):<62} {core.proof_url(r['blob_id'])}" for r in rows]
+        for f in ledger.failed(3):
+            lines.append(f"    ✗ {f['kind']} write failed: {core.clip(f['last_error'] or '', 80)}  (/tusk retry)")
     finally:
         ledger.close()
     return "\n".join(lines)
 
 
-def proofs_report(home: Optional[Path] = None, limit: int = 10) -> str:
-    home = home if home is not None else _hermes_home()
-    ledger = core.open_ledger(home)
+def _live_line(s: core.Settings) -> str:
+    try:
+        client = core.make_client(s)
+    except Exception as exc:
+        return f"  relayer     unavailable: {exc}"
+    try:
+        spaces = client.list_namespaces().namespaces
+        total = next((n.memory_count for n in spaces if n.name == s.namespace), 0)
+        return f"  on Walrus   {total} memories in '{s.namespace}' across all your machines and agents"
+    except Exception as exc:
+        return f"  relayer     unreachable ({s.server_url}): {core.clip(str(exc), 120)}"
+    finally:
+        client.close()
+
+
+def proofs_report(home: Path | None = None, limit: int = 10) -> str:
+    ledger = _ledger(home)
     try:
         rows = ledger.receipts(limit)
     finally:
         ledger.close()
     if not rows:
-        return "No memories stored on Walrus from this install yet."
-    lines = [f"Last {len(rows)} memories stored on Walrus (each is a public, verifiable blob):"]
+        return (
+            "No memories stored from this install yet. Memories written on other machines are still "
+            "recalled; see them with proofs via: /tusk recall <topic>"
+        )
+    lines = [f"Last {len(rows)} memories this install stored on Walrus (each is a public blob):"]
     for r in rows:
         lines.append(f"  ✓ {core.clip(r['text'], 90)}")
-        lines.append(f"    {core.proof_url(r['blob_id'])}   ({core.ago(r['created_at'])})")
+        lines.append(f"    {core.proof_url(r['blob_id'])}   {core.ago(r['created_at'])}")
     return "\n".join(lines)
 
 
-def recall_report(query: str, home: Optional[Path] = None, limit: int = 6) -> str:
-    home = home if home is not None else _hermes_home()
+def recall_report(query: str, home: Path | None = None, limit: int = 6, namespace: str | None = None) -> str:
     s = core.load_settings(home)
     if not s.configured:
-        return "Tusk is not configured."
+        return "Tusk is not configured: run hermes memory setup"
     if not query.strip():
         return "Usage: recall <query>"
     client = core.make_client(s)
     try:
-        hits = core.recall(client, query, s, limit)
+        hits = core.recall(client, query, s, limit, namespace)
     finally:
         client.close()
+    ns = namespace or s.namespace
     if not hits:
-        return f"No memories in '{s.namespace}' match: {query}"
-    lines = [f"Recalled from Walrus ({s.namespace}) for: {query}"]
+        return f"Nothing in '{ns}' matches: {query}"
+    lines = [f"From Walrus ('{ns}') for: {query}"]
     for h in hits:
         lines.append(f"  {h.relevance:.2f}  {core.clip(h.text, 90)}")
         if h.blob_id:
@@ -94,69 +103,71 @@ def recall_report(query: str, home: Optional[Path] = None, limit: int = 6) -> st
     return "\n".join(lines)
 
 
-def verify_report(home: Optional[Path] = None, limit: int = 3, aggregator: str = core.DEFAULT_AGGREGATOR) -> str:
-    """Fetch recent blobs straight from a public Walrus aggregator - no relayer, no key."""
-    home = home if home is not None else _hermes_home()
-    ledger = core.open_ledger(home)
+def verify_report(home: Path | None = None, limit: int = 3, aggregator: str = core.DEFAULT_AGGREGATOR) -> str:
+    """Download recent blobs straight from a public Walrus aggregator and check they are ciphertext."""
+    ledger = _ledger(home)
     try:
         rows = ledger.receipts(limit)
     finally:
         ledger.close()
     if not rows:
-        return "Nothing to verify yet: no memories stored from this install."
-    lines = [f"Verifying {len(rows)} memories directly on Walrus mainnet ({aggregator}):"]
+        return "Nothing to verify yet: this install has not stored a memory."
+    lines = [f"Fetching {len(rows)} blobs directly from Walrus mainnet ({aggregator}), no relayer, no key:"]
     for r in rows:
+        t0 = time.time()
         res = core.verify_blob(r["blob_id"], aggregator)
-        if res["ok"]:
-            enc = "encrypted (plaintext not present)" if core.looks_encrypted(res["body"], r["text"]) \
-                else "WARNING: plaintext visible"
-            lines.append(f"  ✓ {short(r['blob_id'])}  {res['bytes']} bytes on Walrus  ·  {enc}")
-        else:
-            lines.append(f"  ✗ {short(r['blob_id'])}  not retrievable (HTTP {res['status']})")
-        lines.append(f"    “{core.clip(r['text'], 70)}”")
+        took = f"{time.time() - t0:.1f}s"
+        if not res["ok"]:
+            lines.append(f"  ✗ {core.short_blob(r['blob_id'])}  not retrievable (HTTP {res['status']}) {took}")
+            continue
+        sealed = core.plaintext_absent(res["body"], r["text"])
+        verdict = "encrypted: none of the remembered words appear" if sealed else "WARNING: plaintext visible"
+        lines.append(f"  ✓ {core.short_blob(r['blob_id'])}  {res['bytes']} bytes on Walrus  ·  {verdict}  ({took})")
+        lines.append(f"      remembered: “{core.clip(r['text'], 64)}”")
+        lines.append(f"      stored:     {core.hex_preview(res['body'], 20)} …")
     return "\n".join(lines)
 
 
-def short(blob_id: str) -> str:
-    return f"{blob_id[:8]}…{blob_id[-4:]}" if len(blob_id) > 14 else blob_id
+HELP = """/tusk                    status and latest proofs
+/tusk proofs [n]         last n memories with Walruscan proof links
+/tusk recall <query>     semantic search across all your machines and agents
+/tusk verify [n]         download the last n blobs from Walrus and check they are encrypted
+/tusk retry              re-queue writes that failed"""
 
 
-HELP = """/tusk                 status and latest proofs
-/tusk proofs [n]      last n memories with Walruscan proof links
-/tusk recall <query>  semantic search across all your machines and agents
-/tusk verify [n]      fetch the last n blobs straight from Walrus and check they are encrypted
-/tusk retry           re-queue writes that failed"""
-
-
-def tusk_command(raw_args: str = "", **_: Any) -> str:
+def tusk_command(raw_args: str = "", **_context: Any) -> str:
     try:
         parts = shlex.split(raw_args or "")
     except ValueError:
         parts = (raw_args or "").split()
-    sub = parts[0].lower() if parts else "status"
-    rest = parts[1:]
-    try:
-        if sub in ("status", "s"):
-            return status_report(live=True)
-        if sub in ("proofs", "proof", "p"):
-            return proofs_report(limit=_int(rest, 10))
-        if sub in ("recall", "search", "r"):
-            return recall_report(" ".join(rest))
-        if sub in ("verify", "v"):
-            return verify_report(limit=_int(rest, 3))
-        if sub == "retry":
-            ledger = core.open_ledger(_hermes_home())
-            try:
-                n = ledger.requeue_failed()
-            finally:
-                ledger.close()
-            return f"Re-queued {n} failed write(s)."
+    sub, rest = (parts[0].lower(), parts[1:]) if parts else ("status", [])
+    home = active_home()
+    actions = {
+        "status": lambda: status_report(home),
+        "proofs": lambda: proofs_report(home, limit=_count(rest, 10)),
+        "recall": lambda: recall_report(" ".join(rest), home),
+        "verify": lambda: verify_report(home, limit=_count(rest, 3)),
+        "retry": lambda: _retry(home),
+    }
+    action = actions.get({"proof": "proofs", "search": "recall"}.get(sub, sub))
+    if action is None:
         return HELP
-    except Exception as exc:  # noqa: BLE001
+    try:
+        return action()
+    except Exception as exc:
         return f"tusk: {type(exc).__name__}: {exc}"
 
 
-def _int(rest: list[str], default: int) -> int:
+def _retry(home: Path | None) -> str:
+    ledger = _ledger(home)
+    try:
+        n = ledger.requeue_failed()
+    finally:
+        ledger.close()
+    return f"Re-queued {n} failed write(s); the writer picks them up within seconds."
+
+
+def _count(rest: list[str], default: int) -> int:
     try:
         return max(1, min(50, int(rest[0])))
     except (IndexError, ValueError):

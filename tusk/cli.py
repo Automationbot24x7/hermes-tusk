@@ -1,88 +1,71 @@
-"""`hermes tusk ...` subcommands (shown while tusk is the active memory provider)."""
+"""`hermes tusk ...`: available while tusk is the active memory provider."""
 
 from __future__ import annotations
 
+import json
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-from . import commands
-from . import walrus_core as core
+from . import commands, core, outbox
 
-ENTRY_DELIMITER = "\n§\n"  # Hermes' built-in MEMORY.md / USER.md entry separator
-
-
-def _home() -> Optional[Path]:
-    return commands._hermes_home()
+ENTRY_DELIMITER = "\n§\n"  # separator Hermes uses between entries in MEMORY.md / USER.md
 
 
-def _print(text: str) -> None:
+def _say(text: str) -> None:
     sys.stdout.write(text + "\n")
     sys.stdout.flush()
 
 
-def cmd_status(args: Any) -> int:
-    _print(commands.status_report(_home(), live=not args.offline, receipts=args.limit))
-    return 0
+def _configured(home: Path | None) -> core.Settings | None:
+    s = core.load_settings(home)
+    if not s.configured:
+        _say(f"Tusk is not configured. Get a delegate key at {core.SIGNUP_URL}, then run: hermes memory setup")
+        return None
+    return s
 
 
-def cmd_recall(args: Any) -> int:
-    _print(commands.recall_report(" ".join(args.query), _home(), limit=args.limit))
-    return 0
-
-
-def cmd_proofs(args: Any) -> int:
-    _print(commands.proofs_report(_home(), limit=args.limit))
-    return 0
-
-
-def cmd_verify(args: Any) -> int:
-    _print(commands.verify_report(_home(), limit=args.limit, aggregator=args.aggregator))
-    return 0
-
-
-def cmd_retry(args: Any) -> int:
-    ledger = core.open_ledger(_home())
-    try:
-        _print(f"Re-queued {ledger.requeue_failed()} failed write(s).")
-    finally:
-        ledger.close()
-    return 0
-
-
-def flush(home: Optional[Path], settings: core.Settings, gap_s: float = core.WRITE_GAP_S,
-          client: Any = None, out=_print) -> int:
-    """Drain the outbox now, printing a proof link per stored memory. Returns memories stored."""
-    ledger = core.open_ledger(home)
+def flush(
+    home: Path | None,
+    settings: core.Settings,
+    *,
+    gap_s: float = outbox.WRITE_GAP_S,
+    client: Any = None,
+    out: Callable[[str], None] = _say,
+) -> int:
+    """Send everything queued now, printing a proof link per stored memory. Returns memories stored."""
+    ledger = outbox.open_ledger(core.data_dir(home))
     own_client = client is None
     client = client or core.make_client(settings)
-    writer = core.Writer(ledger, lambda: client, gap_s=gap_s)
+    writer = outbox.Writer(ledger, lambda: client, gap_s=gap_s)
     stored = 0
     try:
-        total = ledger.counts()["pending"]
-        if not total:
+        pending = ledger.counts()["pending"]
+        if not pending:
             out("Queue is empty: everything is already on Walrus.")
             return 0
-        out(f"Uploading {total} queued write(s) to Walrus (paced for the relayer's rate limit)...")
+        out(f"Sending {pending} queued write(s) to Walrus, paced for the relayer's rate limit...")
         idle = 0
         while ledger.counts()["pending"] and idle < 3:
             result = writer.step()
-            if result is None:  # due later (backoff) or leased by a running Hermes
+            if result is None:  # waiting on a retry delay, or a running Hermes is sending it
                 idle += 1
                 time.sleep(2)
                 continue
             idle = 0
-            if result["ok"]:
-                for text, blob_id in result["receipts"]:
-                    stored += 1
-                    out(f"  ✓ {core.clip(text, 70):<72} {core.proof_url(blob_id)}")
-                if not result["receipts"]:
-                    out("  · nothing durable to extract from that turn")
-            else:
+            if not result["ok"]:
                 out(f"  ! {result['kind']} write {result['status']}: {core.clip(result['error'], 120)}")
-        left = ledger.counts()
-        out(f"Done: {stored} stored, {left['pending']} still queued, {left['failed']} failed.")
+            elif not result["receipts"]:
+                out("  · nothing durable to extract from that turn")
+            for text, blob_id in result.get("receipts") or []:
+                stored += 1
+                out(f"  ✓ {core.clip(text, 64):<66} {core.proof_url(blob_id)}")
+        c = ledger.counts()
+        out(f"Done: {stored} stored, {c['pending']} still queued, {c['failed']} failed.")
+        if c["in_flight"]:
+            out(f"  {c['in_flight']} write(s) are being sent by a running Hermes right now.")
     finally:
         ledger.close()
         if own_client:
@@ -90,119 +73,187 @@ def flush(home: Optional[Path], settings: core.Settings, gap_s: float = core.WRI
     return stored
 
 
-def cmd_flush(args: Any) -> int:
-    home = _home()
-    s = core.load_settings(home)
-    if not s.configured:
-        _print("Tusk is not configured.")
-        return 1
-    flush(home, s)
-    return 0
-
-
 def read_builtin_entries(home: Path) -> list[str]:
-    """Entries from Hermes' built-in memory files, labelled like on_memory_write does."""
-    out: list[str] = []
+    """Entries of Hermes' built-in memory files, labelled the way on_memory_write labels them."""
+    entries: list[str] = []
     for fname, label in (("USER.md", "About the user"), ("MEMORY.md", "Note")):
-        path = Path(home) / "memories" / fname
         try:
-            raw = path.read_text(encoding="utf-8")
+            raw = (Path(home) / "memories" / fname).read_text(encoding="utf-8")
         except OSError:
             continue
-        for entry in raw.split(ENTRY_DELIMITER):
-            entry = entry.strip()
+        for chunk in raw.split(ENTRY_DELIMITER):
+            entry = chunk.strip()
             if entry and not entry.startswith("#"):
-                out.append(f"{label}: {core.clip(entry, core.MAX_FACT_CHARS)}")
-    return out
+                entries.append(f"{label}: {core.clip(entry, core.MAX_FACT_CHARS)}")
+    return entries
 
 
-def cmd_import(args: Any) -> int:
-    home = _home() or Path.home() / ".hermes"
+def export_receipts(home: Path | None, fmt: str) -> str:
+    """Every memory this install stored, with its blob id and proof link (JSONL or Markdown)."""
+    ledger = outbox.open_ledger(core.data_dir(home))
+    try:
+        rows = list(reversed(ledger.receipts(1_000_000)))
+    finally:
+        ledger.close()
+    records = [
+        {
+            "text": r["text"],
+            "namespace": r["namespace"],
+            "blob_id": r["blob_id"],
+            "proof_url": core.proof_url(r["blob_id"]),
+            "stored_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(r["created_at"])),
+        }
+        for r in rows
+    ]
+    if fmt == "jsonl":
+        return "\n".join(json.dumps(rec, ensure_ascii=False) for rec in records)
+    lines = ["# Tusk memories on Walrus", "", "| Stored (UTC) | Namespace | Memory | Proof |", "|---|---|---|---|"]
+    for rec in records:
+        text = rec["text"].replace("|", "\\|").replace("\n", " ")
+        proof = f"[{rec['blob_id'][:10]}]({rec['proof_url']})"
+        lines.append(f"| {rec['stored_at']} | {rec['namespace']} | {text} | {proof} |")
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- handlers
+
+
+def cmd_status(args: Any) -> None:
+    _say(commands.status_report(commands.active_home(), live=not args.offline, proofs=args.limit))
+
+
+def cmd_recall(args: Any) -> None:
+    _say(commands.recall_report(" ".join(args.query), commands.active_home(), args.limit, args.namespace))
+
+
+def cmd_proofs(args: Any) -> None:
+    _say(commands.proofs_report(commands.active_home(), limit=args.limit))
+
+
+def cmd_verify(args: Any) -> None:
+    try:
+        core.check_aggregator(args.aggregator)
+    except ValueError as exc:
+        _say(str(exc))
+        return
+    _say(commands.verify_report(commands.active_home(), limit=args.limit, aggregator=args.aggregator))
+
+
+def cmd_namespaces(args: Any) -> None:
+    home = commands.active_home()
+    s = _configured(home)
+    if not s:
+        return
+    client = core.make_client(s)
+    try:
+        spaces = client.list_namespaces().namespaces
+    finally:
+        client.close()
+    _say(f"Namespaces on account {s.account_short} (current: {s.namespace})")
+    for n in sorted(spaces, key=lambda n: -n.memory_count):
+        mark = "→" if n.name == s.namespace else " "
+        _say(f"  {mark} {n.name:<28} {n.memory_count:>6} memories")
+
+
+def cmd_flush(args: Any) -> None:
+    home = commands.active_home()
+    s = _configured(home)
+    if s:
+        flush(home, s)
+
+
+def cmd_import(args: Any) -> None:
+    home = commands.active_home() or Path.home() / ".hermes"
     s = core.load_settings(home)
     entries = read_builtin_entries(home)
     if not entries:
-        _print(f"No built-in memory entries found under {home / 'memories'}.")
-        return 0
-    ledger = core.open_ledger(home)
+        _say(f"No built-in memory entries found in {home / 'memories'}.")
+        return
+    ledger = outbox.open_ledger(core.data_dir(home))
     try:
-        added = sum(1 for e in entries if ledger.enqueue("fact", s.namespace, e))
+        added = sum(ledger.enqueue("fact", s.namespace, core.redact(e)) for e in entries)
     finally:
         ledger.close()
-    _print(f"Queued {added} of {len(entries)} built-in memory entries for Walrus "
-           f"({len(entries) - added} were already queued or stored).")
+    _say(
+        f"Queued {added} of {len(entries)} built-in memory entries for Walrus "
+        f"({len(entries) - added} were already queued or sent)."
+    )
     if args.no_flush or not s.configured:
-        _print("They upload in the background the next time Hermes runs (or run: hermes tusk flush).")
-        return 0
+        _say("They go out in the background next time Hermes runs, or now with: hermes tusk flush")
+        return
     flush(home, s)
-    return 0
 
 
-def cmd_restore(args: Any) -> int:
-    """Ask the relayer to rebuild this namespace's search index from the blobs on Walrus."""
-    home = _home()
-    s = core.load_settings(home)
-    if not s.configured:
-        _print("Tusk is not configured.")
-        return 1
-    ns = args.namespace or s.namespace
+def cmd_export(args: Any) -> None:
+    _say(export_receipts(commands.active_home(), args.format))
+
+
+def cmd_restore(args: Any) -> None:
+    home = commands.active_home()
+    s = _configured(home)
+    if not s:
+        return
+    namespace = args.namespace or s.namespace
     client = core.make_client(s)
     try:
-        _print(f"Rebuilding the '{ns}' index from Walrus blobs owned by {s.account_short}...")
+        _say(f"Asking the relayer to rebuild the '{namespace}' index from blobs on Walrus ({s.account_short})...")
         t0 = time.time()
-        res = client.restore(ns, limit=args.limit)
-        _print(f"  total blobs {res.total}  ·  restored {res.restored}  ·  already indexed {res.skipped}"
-               f"  ·  failed {len(res.failed or []) if isinstance(res.failed, list) else res.failed}"
-               f"  ({time.time() - t0:.1f}s)")
-        if getattr(res, "truncated", False):
-            _print(f"  more remain: run again with --limit {args.limit * 2}")
+        res = client.restore(namespace, limit=args.limit)
+        failed = len(res.failed) if isinstance(res.failed, list) else res.failed
+        _say(
+            f"  {res.total} blobs · {res.restored} restored · {res.skipped} already indexed · {failed} failed"
+            f"  ({time.time() - t0:.1f}s)"
+        )
+        if res.truncated:
+            _say(f"  More remain: run again with --limit {args.limit * 2}")
     finally:
         client.close()
-    return 0
+
+
+def cmd_retry(args: Any) -> None:
+    ledger = outbox.open_ledger(core.data_dir(commands.active_home()))
+    try:
+        _say(f"Re-queued {ledger.requeue_failed()} failed write(s).")
+    finally:
+        ledger.close()
 
 
 def register_cli(subparser) -> None:
     subs = subparser.add_subparsers(dest="tusk_command")
 
-    p = subs.add_parser("status", help="Account, namespace, queue and latest proofs")
-    p.add_argument("--offline", action="store_true", help="Skip the relayer health check")
-    p.add_argument("--limit", type=int, default=5)
-    p.set_defaults(tusk_func=cmd_status)
+    def add(name: str, handler: Callable[[Any], None], help_text: str):
+        p = subs.add_parser(name, help=help_text)
+        p.set_defaults(tusk_handler=handler)
+        return p
 
-    p = subs.add_parser("recall", help="Semantic search over your Walrus memory")
+    p = add("status", cmd_status, "Account, namespace, queue and latest proofs")
+    p.add_argument("--offline", action="store_true", help="Skip the relayer call")
+    p.add_argument("--limit", type=int, default=5, help="Proofs to show")
+    p = add("recall", cmd_recall, "Semantic search with relevance and proof links")
     p.add_argument("query", nargs="+")
     p.add_argument("--limit", type=int, default=6)
-    p.set_defaults(tusk_func=cmd_recall)
-
-    p = subs.add_parser("proofs", help="Latest stored memories with Walruscan proof links")
+    p.add_argument("--namespace", default=None, help="Search another namespace")
+    p = add("proofs", cmd_proofs, "Latest memories this install stored, with Walruscan links")
     p.add_argument("--limit", type=int, default=10)
-    p.set_defaults(tusk_func=cmd_proofs)
-
-    p = subs.add_parser("verify", help="Fetch recent blobs straight from Walrus and check they are encrypted")
+    p = add("verify", cmd_verify, "Download recent blobs from Walrus and check they are encrypted")
     p.add_argument("--limit", type=int, default=3)
-    p.add_argument("--aggregator", default=core.DEFAULT_AGGREGATOR)
-    p.set_defaults(tusk_func=cmd_verify)
-
-    p = subs.add_parser("import", help="Copy Hermes' built-in MEMORY.md / USER.md entries to Walrus")
-    p.add_argument("--no-flush", action="store_true", help="Queue only; upload later in the background")
-    p.set_defaults(tusk_func=cmd_import)
-
-    p = subs.add_parser("flush", help="Upload everything still queued, now")
-    p.set_defaults(tusk_func=cmd_flush)
-
-    p = subs.add_parser("restore", help="Rebuild the namespace index from the blobs stored on Walrus")
+    p.add_argument("--aggregator", default=core.DEFAULT_AGGREGATOR, help="Any public https aggregator")
+    add("namespaces", cmd_namespaces, "Namespaces on your account and their memory counts")
+    p = add("import", cmd_import, "Copy Hermes' built-in MEMORY.md / USER.md entries to Walrus")
+    p.add_argument("--no-flush", action="store_true", help="Queue only; send later in the background")
+    add("flush", cmd_flush, "Send everything still queued, now")
+    p = add("export", cmd_export, "Print every stored memory with its blob id and proof link")
+    p.add_argument("--format", choices=("md", "jsonl"), default="md")
+    p = add("restore", cmd_restore, "Rebuild the namespace's search index from its blobs on Walrus")
     p.add_argument("--namespace", default=None)
     p.add_argument("--limit", type=int, default=50)
-    p.set_defaults(tusk_func=cmd_restore)
-
-    p = subs.add_parser("retry", help="Re-queue writes that failed")
-    p.set_defaults(tusk_func=cmd_retry)
-
+    add("retry", cmd_retry, "Re-queue writes that failed")
     subparser.set_defaults(func=dispatch)
 
 
-def dispatch(args: Any) -> int:
-    fn = getattr(args, "tusk_func", None)
-    if fn is None:  # bare `hermes tusk`
+def dispatch(args: Any) -> None:
+    handler = getattr(args, "tusk_handler", None)
+    if handler is None:  # bare `hermes tusk`
         args.offline, args.limit = False, 5
-        fn = cmd_status
-    return fn(args)
+        handler = cmd_status
+    handler(args)

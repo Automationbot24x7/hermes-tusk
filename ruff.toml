@@ -1,0 +1,15 @@
+target-version = "py311"
+line-length = 120
+
+[lint]
+select = ["E", "F", "W", "B", "UP", "SIM", "I", "RUF", "PL"]
+ignore = [
+  "PLR0913",  # provider and settings constructors mirror the SDK's keyword arguments
+  "PLR2004",  # small literal thresholds read better inline
+  "PLC0415",  # optional imports (memwal, Hermes internals) stay lazy on purpose
+  "RUF001", "RUF002", "RUF003",  # typographic characters in user-facing text are intended
+  "SIM108",   # if/else reads better than a long ternary for the retry delay
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["PLR0917", "PLR0915"]

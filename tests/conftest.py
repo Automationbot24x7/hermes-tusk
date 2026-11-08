@@ -19,6 +19,7 @@ PLUGIN_DIR = ROOT / "tusk"
 def _install_agent_stub() -> None:
     try:
         import agent.memory_provider  # noqa: F401  (running inside a Hermes checkout)
+
         return
     except ImportError:
         pass
@@ -57,7 +58,8 @@ def _load_plugin():
     if "tusk" in sys.modules:
         return sys.modules["tusk"]
     spec = importlib.util.spec_from_file_location(
-        "tusk", PLUGIN_DIR / "__init__.py", submodule_search_locations=[str(PLUGIN_DIR)])
+        "tusk", PLUGIN_DIR / "__init__.py", submodule_search_locations=[str(PLUGIN_DIR)]
+    )
     module = importlib.util.module_from_spec(spec)
     sys.modules["tusk"] = module
     spec.loader.exec_module(module)
@@ -75,15 +77,21 @@ def plugin():
 
 @pytest.fixture
 def core():
-    import tusk.walrus_core as core
+    from tusk import core
 
     return core
 
 
 @pytest.fixture
+def outbox():
+    from tusk import outbox
+
+    return outbox
+
+
+@pytest.fixture
 def settings(core):
-    return core.Settings(key="ab" * 32, account_id="0x" + "c" * 64, namespace="test",
-                         prefetch_timeout_s=5.0)
+    return core.Settings(key="ab" * 32, account_id="0x" + "c" * 64, namespace="test", prefetch_timeout_s=5.0)
 
 
 @pytest.fixture
