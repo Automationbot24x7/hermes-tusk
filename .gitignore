@@ -5,8 +5,8 @@ __pycache__/
 .pytest_cache/
 .venv/
 *.egg-info/
-dist/
-build/
+/dist/
+/build/
 .DS_Store
 video/raw/
 video/out/
