@@ -405,6 +405,28 @@ def test_prefetch_injects_memories_with_proof_ids(provider, mock_client):
     assert status.provider_label == "Tusk" and status.count >= 1
 
 
+def test_first_turn_adds_the_user_profile(plugin, settings, mock_client, tmp_path):
+    mock_client.remember_and_wait("About the user: name Rajeev, role consultant, location Pune", namespace="test")
+    mock_client.remember_and_wait("The staging cluster runs in eu-west-1", namespace="test")
+    p = plugin.TuskMemoryProvider(client=mock_client, settings=settings, write_gap_s=0)
+    p.initialize("s1", hermes_home=str(tmp_path), agent_context="primary")
+    try:
+        first = p.prefetch("where does staging run", session_id="s1")
+        assert "eu-west-1" in first and "Rajeev" in first  # live hit plus the warmed-up profile
+        later = p.prefetch("staging cluster runs in", session_id="s1")
+        assert "eu-west-1" in later and "Rajeev" not in later  # profile only on a session's first turn
+        assert "Rajeev" in p.prefetch("where does staging run", session_id="s2")  # a new session
+    finally:
+        p.shutdown()
+
+
+def test_nothing_recalled_means_no_indicator(provider):
+    provider._recall = lambda q, limit=None, namespace=None: []
+    provider._profile = []
+    assert provider.prefetch("anything about the moon", session_id="session-1") == ""
+    assert provider.recall_status() is None
+
+
 def test_prefetch_skips_trivial_prompts(provider):
     assert provider.prefetch("ok", session_id="session-1") == ""
     assert provider.recall_status() is None

@@ -106,5 +106,7 @@ def provider(plugin, settings, mock_client, tmp_path):
     p = plugin.TuskMemoryProvider(client=mock_client, settings=settings, write_gap_s=0)
     p.initialize("session-1", hermes_home=str(tmp_path), platform="cli", agent_context="primary")
     p._writer.stop()  # tests drive the writer step by step
+    if p._warmup is not None:
+        p._warmup.join(5)
     yield p
     p.shutdown()

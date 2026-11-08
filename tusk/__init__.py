@@ -104,6 +104,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 ]
 
 _CACHE_SESSIONS = 64
+# Recalled once per process, in the background, and added to the first turn of every session, so a
+# broad opener ("what do you know about me?") still gets the user's core facts.
+PROFILE_QUERY = "about the user: name, role, location, preferences, routines and current projects"
+PROFILE_LIMIT = 4
+WARMUP_WAIT_S = 5.0  # the first turn may wait this long for the warm-up (Hermes allows 8 s for recall)
 
 
 def _json(data: Any) -> str:
@@ -138,6 +143,9 @@ class TuskMemoryProvider(MemoryProvider):
         self._warming: dict[str, threading.Thread] = {}
         self._last_count: int | None = None
         self._explicit_this_turn = False
+        self._warmup: threading.Thread | None = None
+        self._profile: list[core.Hit] = []
+        self._sessions_seen: OrderedDict[str, None] = OrderedDict()
 
     # ------------------------------------------------------------------ availability
 
@@ -181,6 +189,17 @@ class TuskMemoryProvider(MemoryProvider):
         )
         if self._writes_enabled:
             self._writer.start()  # also resumes anything an earlier run left queued
+        if self._settings.configured:
+            # Connect and fetch the user's profile facts while Hermes is still starting up, so the
+            # first turn neither pays the connection cost nor misses the basics.
+            self._warmup = spawn_context_thread(self._warm_up, name="tusk-warmup")
+            self._warmup.start()
+
+    def _warm_up(self) -> None:
+        try:
+            self._profile = self._recall(PROFILE_QUERY, PROFILE_LIMIT)
+        except Exception as exc:
+            logger.debug("tusk: warm-up recall failed: %s", exc)
 
     def shutdown(self) -> None:
         writer, ledger, client = self._writer, self._ledger, self._client
@@ -248,6 +267,13 @@ class TuskMemoryProvider(MemoryProvider):
         if not self._settings or not self._settings.configured or is_trivial_prompt(query):
             self._last_count = None
             return ""
+        first_turn = session_id not in self._sessions_seen
+        if first_turn:
+            self._sessions_seen[session_id] = None
+            while len(self._sessions_seen) > _CACHE_SESSIONS:
+                self._sessions_seen.popitem(last=False)
+            if self._warmup is not None:
+                self._warmup.join(WARMUP_WAIT_S)
         with self._cache_lock:
             cached = self._cache.get(session_id)
         if cached and cached[0] == query:
@@ -256,7 +282,10 @@ class TuskMemoryProvider(MemoryProvider):
             hits = self._recall_bounded(query, session_id)
             if hits is None:  # slow network: use what queue_prefetch warmed after the last turn
                 hits = cached[1] if cached else []
-        self._last_count = len(hits)
+        if first_turn:
+            known = {h.blob_id for h in hits}
+            hits = hits + [h for h in self._profile if h.blob_id not in known]
+        self._last_count = len(hits) or None
         return core.format_recall(hits, self._settings.namespace)
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
